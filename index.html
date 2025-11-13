@@ -114,7 +114,6 @@
     </style>
 
     <script type="text/javascript" src="charting_library/charting_library.standalone.js"></script>
-    <script type="text/javascript" src="datafeeds/udf/dist/bundle.js"></script>
 </head>
 <body>
 
@@ -145,110 +144,304 @@
         }
 
         window.addEventListener('DOMContentLoaded', (event) => {
-            const urlParams = getUrlParams();
-            let tvWidget = null;
-            const language = urlParams.lang || "fr";
+        // =================================================================================================
+        // 1. CONFIGURATION & HELPERS
+        // =================================================================================================
 
-            tvWidget = new TradingView.widget({
-                container: 'tv_chart_container',
-                locale: language,
-                symbol: 'AAPL',
-                interval: 'D',
-                fullscreen: false,
-                library_path: 'charting_library/',
-                // custom_css_url: '/charting_library/custom.css',
-                datafeed: new Datafeeds.UDFCompatibleDatafeed("https://demo-feed-data.tradingview.com"),
-                theme: "dark",
-                style: "1",
-                drawings_access: { type: 'black', tools: [{ name: "Regression Trend" }] },
-                disabled_features: [
-                    "use_localstorage_for_settings",
-                    "popup_hints",
-                    "header_compare",
-                    // "header_symbol_search",
-                    // "header_undo_redo",
-                    // "header_screenshot",
-                    // "header_saveload",
-                    // "header_settings",
-                    // "header_fullscreen_button",
-                    // "header_widget_dom_node"
-                ],
-                enabled_features: [
-                    "study_templates",
-                    "side_toolbar_in_fullscreen_mode",
-                    "items_favoriting",
-                    "hide_left_toolbar_by_default",
-                    "header_widget_dom_node",
-                    "header_symbol_search",
-                    "header_interval_dialog_bar",
-                    "header_chart_type",
-                    "header_indicators",
-                    "header_undo_redo",
-                    "header_screenshot",
-                    "header_saveload",
-                    "header_settings",
-                    "header_fullscreen_button"
-                ],
-                timezone: 'Etc/UTC',
-                charts_storage_url: 'https://saveload.tradingview.com',
-                charts_storage_api_version: "1.1",
-                client_id: 'tradingview.com',
-                user_id: 'public_user_id',
-                overrides: {
-                    "paneProperties.background": "#0d1117",
-                    "paneProperties.vertGridProperties.color": "#21262d",
-                    "paneProperties.horzGridProperties.color": "#21262d",
-                    "symbolWatermarkProperties.transparency": 90,
-                    "scalesProperties.textColor": "#e6edf3",
-                    "mainSeriesProperties.candleStyle.upColor": "#26a69a",
-                    "mainSeriesProperties.candleStyle.downColor": "#ef5350",
-                    "mainSeriesProperties.candleStyle.borderUpColor": "#26a69a",
-                    "mainSeriesProperties.candleStyle.borderDownColor": "#ef5350",
-                    "mainSeriesProperties.candleStyle.wickUpColor": "#26a69a",
-                    "mainSeriesProperties.candleStyle.wickDownColor": "#ef5350",
-                },
-                studies: [
-                    { id: "MASimple@tv-basicstudies", inputs: { length: 20 } },
-                    { id: "Volume@tv-basicstudies" }
-                ]
-            });
+        // !!! IMPORTANT !!!
+        // Remplacez "<api-key>" par votre propre clé API de CryptoCompare.
+        const apiKey = "57f08ff3ab37cdb4b28bc26473a83f32dfb9f552c4eb54941a3cdb3472d0cb8d";
 
-            tvWidget.onChartReady(() => {
-                console.log("Le graphique est prêt !");
+        const configurationData = {
+            supported_resolutions: ['1', '5', '15', '60', '1D', '1W', '1M'],
+            exchanges: [
+                { value: 'Binance', name: 'Binance', desc: 'Binance' },
+                { value: 'Coinbase', name: 'Coinbase', desc: 'Coinbase' },
+                { value: 'Kraken', name: 'Kraken', desc: 'Kraken' },
+            ],
+            symbols_types: [{ name: 'crypto', value: 'crypto' }]
+        };
 
-                const loadSymbolButton = document.getElementById('load-symbol-button');
-                const customSymbolInput = document.getElementById('custom-symbol-input');
+        async function makeApiRequest(path) {
+            try {
+                const url = new URL(`https://min-api.cryptocompare.com/${path}`);
+                url.searchParams.append('api_key', apiKey);
+                const response = await fetch(url.toString());
+                return response.json();
+            } catch (error) {
+                throw new Error(`CryptoCompare request error: ${error.status}`);
+            }
+        }
 
-                function setSymbol(symbol) {
-                    if (tvWidget && tvWidget.chart()) {
-                        tvWidget.chart().setSymbol(symbol, () => {
-                            console.log("Symbole changé pour :", symbol);
-                        });
+        function parseFullSymbol(fullSymbol) {
+            const match = fullSymbol.match(/^(\w+):(\w+)\/(\w+)$/);
+            if (!match) return null;
+            return { exchange: match[1], fromSymbol: match[2], toSymbol: match[3] };
+        }
+
+        // =================================================================================================
+        // 2. STREAMING (WEBSOCKET)
+        // =================================================================================================
+
+        const socket = new WebSocket(`wss://streamer.cryptocompare.com/v2?api_key=${apiKey}`);
+        const channelToSubscription = new Map();
+
+        socket.addEventListener('open', () => console.log('[socket] Connected'));
+        socket.addEventListener('close', (reason) => console.log('[socket] Disconnected:', reason));
+        socket.addEventListener('error', (error) => console.log('[socket] Error:', error));
+
+        socket.addEventListener('message', (event) => {
+            const data = JSON.parse(event.data);
+            const { TYPE: eventType, M: exchange, FSYM: fromSymbol, TSYM: toSymbol, TS: tradeTime, P: tradePrice, Q: tradeVolume } = data;
+
+            if (parseInt(eventType) !== 0) return;
+
+            const channelString = `0~${exchange}~${fromSymbol}~${toSymbol}`;
+            const subscriptionItem = channelToSubscription.get(channelString);
+
+            if (subscriptionItem === undefined) return;
+
+            const lastBar = subscriptionItem.lastBar;
+            const nextBarTime = getNextBarTime(lastBar.time, subscriptionItem.resolution);
+
+            let bar;
+            if (tradeTime * 1000 >= nextBarTime) {
+                bar = { time: nextBarTime, open: tradePrice, high: tradePrice, low: tradePrice, close: tradePrice, volume: tradeVolume };
+            } else {
+                bar = { ...lastBar, high: Math.max(lastBar.high, tradePrice), low: Math.min(lastBar.low, tradePrice), close: tradePrice, volume: (lastBar.volume || 0) + tradeVolume };
+            }
+            subscriptionItem.lastBar = bar;
+            subscriptionItem.handlers.forEach((handler) => handler.callback(bar));
+        });
+
+        function getNextBarTime(barTime, resolution) {
+            const date = new Date(barTime);
+            if (resolution === '1D') {
+                date.setUTCDate(date.getUTCDate() + 1);
+                date.setUTCHours(0, 0, 0, 0);
+            } else {
+                const interval = parseInt(resolution);
+                date.setUTCMinutes(date.getUTCMinutes() + interval);
+            }
+            return date.getTime();
+        }
+
+        function subscribeOnStream(symbolInfo, resolution, onRealtimeCallback, subscriberUID, onResetCacheNeededCallback, lastBar) {
+            const parsedSymbol = parseFullSymbol(symbolInfo.ticker);
+            const channelString = `0~${parsedSymbol.exchange}~${parsedSymbol.fromSymbol}~${parsedSymbol.toSymbol}`;
+            const handler = { id: subscriberUID, callback: onRealtimeCallback };
+
+            let subscriptionItem = channelToSubscription.get(channelString);
+            if (subscriptionItem) {
+                subscriptionItem.handlers.push(handler);
+                return;
+            }
+
+            subscriptionItem = { subscriberUID, resolution, lastBar, handlers: [handler] };
+            channelToSubscription.set(channelString, subscriptionItem);
+
+            const subRequest = { action: 'SubAdd', subs: [channelString] };
+            if (socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify(subRequest));
+            }
+        }
+
+        function unsubscribeFromStream(subscriberUID) {
+            for (const channelString of channelToSubscription.keys()) {
+                const sub = channelToSubscription.get(channelString);
+                const handlerIndex = sub.handlers.findIndex(h => h.id === subscriberUID);
+
+                if (handlerIndex !== -1) {
+                    sub.handlers.splice(handlerIndex, 1);
+                    if (sub.handlers.length === 0) {
+                        const subRequest = { action: 'SubRemove', subs: [channelString] };
+                        socket.send(JSON.stringify(subRequest));
+                        channelToSubscription.delete(channelString);
+                        break;
                     }
                 }
+            }
+        }
 
-                loadSymbolButton.addEventListener('click', () => {
-                    if (customSymbolInput.value) {
-                        setSymbol(customSymbolInput.value.toUpperCase());
-                    }
+        // =================================================================================================
+        // 3. DATAFEED IMPLEMENTATION
+        // =================================================================================================
+
+        const lastBarsCache = new Map();
+
+        const customDatafeed = {
+            onReady: (callback) => {
+                console.log('[onReady]: Method call');
+                setTimeout(() => callback(configurationData));
+            },
+
+            searchSymbols: async (userInput, exchange, symbolType, onResultReadyCallback) => {
+                console.log('[searchSymbols]: Method call');
+                const allSymbols = await getAllSymbols();
+                const newSymbols = allSymbols.filter(symbol => {
+                    const isExchangeValid = exchange === '' || symbol.exchange === exchange;
+                    const isFullSymbolContainsInput = symbol.ticker.toLowerCase().indexOf(userInput.toLowerCase()) !== -1;
+                    return isExchangeValid && isFullSymbolContainsInput;
                 });
-                
-                customSymbolInput.addEventListener('keypress', function (e) {
-                    if (e.key === 'Enter') {
-                        if (customSymbolInput.value) {
-                            setSymbol(customSymbolInput.value.toUpperCase());
+                onResultReadyCallback(newSymbols);
+            },
+
+            resolveSymbol: async (symbolName, onSymbolResolvedCallback, onResolveErrorCallback) => {
+                console.log('[resolveSymbol]: Method call', symbolName);
+                const allSymbols = await getAllSymbols();
+                const symbolItem = allSymbols.find(({ ticker }) => ticker === symbolName);
+
+                if (!symbolItem) {
+                    console.log('[resolveSymbol]: Cannot resolve symbol', symbolName);
+                    onResolveErrorCallback("unknown_symbol");
+                    return;
+                }
+
+                const symbolInfo = {
+                    ticker: symbolItem.ticker, name: symbolItem.symbol, description: symbolItem.description,
+                    type: symbolItem.type, exchange: symbolItem.exchange, listed_exchange: symbolItem.exchange,
+                    session: '24x7', timezone: 'Etc/UTC', minmov: 1, pricescale: 100000000,
+                    has_intraday: true, intraday_multipliers: ['1', '5', '15', '60'], has_daily: true,
+                    supported_resolutions: configurationData.supported_resolutions, volume_precision: 8, data_status: 'streaming',
+                };
+                onSymbolResolvedCallback(symbolInfo);
+            },
+
+            getBars: async (symbolInfo, resolution, periodParams, onHistoryCallback, onErrorCallback) => {
+                const { from, to, firstDataRequest } = periodParams;
+                console.log('[getBars]: Method call', symbolInfo, resolution, from, to);
+                const parsedSymbol = parseFullSymbol(symbolInfo.ticker);
+
+                const urlParameters = {
+                    e: parsedSymbol.exchange,
+                    fsym: parsedSymbol.fromSymbol,
+                    tsym: parsedSymbol.toSymbol,
+                    toTs: to,
+                    limit: 2000,
+                };
+                const query = Object.keys(urlParameters).map(name => `${name}=${encodeURIComponent(urlParameters[name])}`).join('&');
+                const endpoint = resolution === '1D' ? 'histoday' : (resolution.includes('W') || resolution.includes('M')) ? 'histoday' : 'histominute';
+
+                try {
+                    const data = await makeApiRequest(`data/v2/${endpoint}?${query}`);
+                    if ((data.Response && data.Response === 'Error') || data.Data.Data.length === 0) {
+                        onHistoryCallback([], { noData: true });
+                        return;
+                    }
+                    let bars = [];
+                    data.Data.Data.forEach(bar => {
+                        if (bar.time >= from && bar.time < to) {
+                            bars.push({ time: bar.time * 1000, low: bar.low, high: bar.high, open: bar.open, close: bar.close, volume: bar.volumefrom });
                         }
-                    }
-                });
-
-                document.querySelectorAll('.category-button').forEach(button => {
-                    button.addEventListener('click', () => {
-                        const symbol = button.getAttribute('data-symbol');
-                        setSymbol(symbol);
                     });
-                });
+                    if (firstDataRequest) {
+                        lastBarsCache.set(symbolInfo.ticker, { ...bars[bars.length - 1] });
+                    }
+                    console.log(`[getBars]: returned ${bars.length} bar(s)`);
+                    onHistoryCallback(bars, { noData: false });
+                } catch (error) {
+                    console.log('[getBars]: Get error', error);
+                    onErrorCallback(error);
+                }
+            },
+
+            subscribeBars: (symbolInfo, resolution, onRealtimeCallback, subscriberUID, onResetCacheNeededCallback) => {
+                console.log('[subscribeBars]: Method call with subscriberUID:', subscriberUID);
+                subscribeOnStream(symbolInfo, resolution, onRealtimeCallback, subscriberUID, onResetCacheNeededCallback, lastBarsCache.get(symbolInfo.ticker));
+            },
+
+            unsubscribeBars: (subscriberUID) => {
+                console.log('[unsubscribeBars]: Method call with subscriberUID:', subscriberUID);
+                unsubscribeFromStream(subscriberUID);
+            },
+        };
+
+        async function getAllSymbols() {
+            const data = await makeApiRequest('data/v3/all/exchanges');
+            let allSymbols = [];
+            const generateSymbol = (exchange, fromSymbol, toSymbol) => ({ short: `${fromSymbol}/${toSymbol}`, full: `${exchange}:${fromSymbol}/${toSymbol}` });
+
+            for (const exchange of configurationData.exchanges) {
+                if (data.Data[exchange.value]) {
+                    const pairs = data.Data[exchange.value].pairs;
+                    for (const leftPairPart of Object.keys(pairs)) {
+                        const symbols = pairs[leftPairPart].map(rightPairPart => {
+                            const symbol = generateSymbol(exchange.value, leftPairPart, rightPairPart);
+                            return { symbol: symbol.short, ticker: symbol.full, description: symbol.short, exchange: exchange.value, type: 'crypto' };
+                        });
+                        allSymbols = [...allSymbols, ...symbols];
+                    }
+                }
+            }
+            return allSymbols;
+        }
+
+        // =================================================================================================
+        // 4. WIDGET INITIALIZATION
+        // =================================================================================================
+
+        const urlParams = getUrlParams();
+        const language = urlParams.lang || "fr";
+
+        const tvWidget = new TradingView.widget({
+            symbol: 'Binance:BTC/USDT',
+            interval: '60',
+            container: 'tv_chart_container',
+            datafeed: customDatafeed,
+            library_path: 'charting_library/',
+            locale: language,
+            fullscreen: false,
+            theme: "dark",
+            disabled_features: ["use_localstorage_for_settings", "popup_hints", "header_compare"],
+            enabled_features: ["study_templates", "side_toolbar_in_fullscreen_mode", "items_favoriting", "hide_left_toolbar_by_default"],
+            overrides: {
+                "paneProperties.background": "#0d1117",
+                "paneProperties.vertGridProperties.color": "#21262d",
+                "paneProperties.horzGridProperties.color": "#21262d",
+                "symbolWatermarkProperties.transparency": 90,
+                "scalesProperties.textColor": "#e6edf3",
+                "mainSeriesProperties.candleStyle.upColor": "#26a69a",
+                "mainSeriesProperties.candleStyle.downColor": "#ef5350",
+                "mainSeriesProperties.candleStyle.borderUpColor": "#26a69a",
+                "mainSeriesProperties.candleStyle.borderDownColor": "#ef5350",
+                "mainSeriesProperties.candleStyle.wickUpColor": "#26a69a",
+                "mainSeriesProperties.candleStyle.wickDownColor": "#ef5350",
+            },
+        });
+
+        tvWidget.onChartReady(() => {
+            console.log("Le graphique est prêt !");
+            const chart = tvWidget.activeChart();
+            chart.onIntervalChanged().subscribe(null, () => {
+                console.log('Interval changed. Cache could be reset here if needed.');
             });
         });
+
+        // --- Logique pour les contrôles personnalisés ---
+        const loadSymbolButton = document.getElementById('load-symbol-button');
+        const customSymbolInput = document.getElementById('custom-symbol-input');
+        const setSymbol = (symbol) => {
+            if (tvWidget && tvWidget.chart()) {
+                // Pour un datafeed personnalisé, il faut le ticker complet comme "Exchange:FROM/TO"
+                // On essaie de trouver un symbole correspondant sur un exchange par défaut si non spécifié.
+                let fullSymbol = symbol;
+                if (!symbol.includes(':')) {
+                    fullSymbol = `Binance:${symbol}`; // Binance par défaut
+                }
+                tvWidget.chart().setSymbol(fullSymbol, () => console.log("Symbole changé pour :", fullSymbol));
+            }
+        };
+        loadSymbolButton.addEventListener('click', () => { if (customSymbolInput.value) setSymbol(customSymbolInput.value.toUpperCase()); });
+        customSymbolInput.addEventListener('keypress', (e) => { if (e.key === 'Enter' && customSymbolInput.value) setSymbol(customSymbolInput.value.toUpperCase()); });
+        document.querySelectorAll('.category-button').forEach(button => {
+            button.addEventListener('click', () => {
+                const symbol = button.getAttribute('data-symbol');
+                // On ajuste les symboles par défaut pour correspondre au nouveau format du datafeed
+                const cryptoSymbols = { "AAPL": "Coinbase:BTC/USD", "BTC/USD": "Binance:BTC/USDT", "EUR/USD": "Kraken:EUR/USD" };
+                tvWidget.chart().setSymbol(cryptoSymbols[symbol] || "Binance:ETH/USDT");
+            });
+        });
+    });
     </script>
 
 </body>
