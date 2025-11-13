@@ -114,19 +114,21 @@
     </style>
 
     <script type="text/javascript" src="charting_library/charting_library.standalone.js"></script>
+    <!-- L'adaptateur UDF est de nouveau nécessaire pour le fournisseur de données généraliste -->
+    <script type="text/javascript" src="datafeeds/udf/dist/bundle.js"></script>
 </head>
 <body>
 
     <header class="site-header">
         <h1>Analyseur de Marché</h1>
         <div class="controls">
-            <input type="text" id="custom-symbol-input" placeholder="Ex: BTC/USDT, ETH/EUR...">
+            <input type="text" id="custom-symbol-input" placeholder="Ex: AAPL, EUR/USD, BTC/USD...">
             <button id="load-symbol-button">Charger</button>
         </div>
         <div class="categories">
-            <button class="category-button" data-symbol="Binance:BTC/USDT">BTC/USDT</button>
-            <button class="category-button" data-symbol="Binance:ETH/USDT">ETH/USDT</button>
-            <button class="category-button" data-symbol="Binance:SOL/USDT">SOL/USDT</button>
+            <button class="category-button" data-symbol="AAPL">Actions</button>
+            <button class="category-button" data-symbol="BTC/USD">Crypto</button>
+            <button class="category-button" data-symbol="EUR/USD">Forex</button>
         </div>
     </header>
 
