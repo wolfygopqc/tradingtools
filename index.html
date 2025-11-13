@@ -120,13 +120,13 @@
     <header class="site-header">
         <h1>Analyseur de Marché</h1>
         <div class="controls">
-            <input type="text" id="custom-symbol-input" placeholder="Ex: BTC/USD, AAPL...">
+            <input type="text" id="custom-symbol-input" placeholder="Ex: BTC/USDT, ETH/EUR...">
             <button id="load-symbol-button">Charger</button>
         </div>
         <div class="categories">
-            <button class="category-button" data-symbol="AAPL">Actions</button>
-            <button class="category-button" data-symbol="BTC/USD">Crypto</button>
-            <button class="category-button" data-symbol="EUR/USD">Forex</button>
+            <button class="category-button" data-symbol="Binance:BTC/USDT">BTC/USDT</button>
+            <button class="category-button" data-symbol="Binance:ETH/USDT">ETH/USDT</button>
+            <button class="category-button" data-symbol="Binance:SOL/USDT">SOL/USDT</button>
         </div>
     </header>
 
@@ -436,9 +436,8 @@
         document.querySelectorAll('.category-button').forEach(button => {
             button.addEventListener('click', () => {
                 const symbol = button.getAttribute('data-symbol');
-                // On ajuste les symboles par défaut pour correspondre au nouveau format du datafeed
-                const cryptoSymbols = { "AAPL": "Coinbase:BTC/USD", "BTC/USD": "Binance:BTC/USDT", "EUR/USD": "Kraken:EUR/USD" };
-                tvWidget.chart().setSymbol(cryptoSymbols[symbol] || "Binance:ETH/USDT");
+                // Les boutons ont maintenant le symbole complet, on peut l'utiliser directement
+                tvWidget.chart().setSymbol(symbol, () => console.log("Symbole changé pour :", symbol));
             });
         });
     });
